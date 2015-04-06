@@ -23,10 +23,22 @@ func routeHandler(rt *Route) func(http.ResponseWriter, *http.Request) {
 				req.SetState(k, v)
 			}
 		}
-		resp := rt.Fn(req)
-		if resp != nil {
-			req.Respond(resp)
+
+		var last http.Handler
+
+		last = http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			resp := rt.Fn(req)
+			if resp != nil {
+				req.Respond(resp)
+			}
+		})
+
+		mws := rt.router.middlewares
+		for i := len(mws) - 1; i >= 0; i-- {
+			last = mws[i](last)
 		}
+
+		last.ServeHTTP(w, r)
 	}
 }
 
