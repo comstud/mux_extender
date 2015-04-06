@@ -7,39 +7,22 @@ import (
 	"net/http"
 )
 
-func routeHandler(rt *Route) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		vars := mux.Vars(r)
-		req := &RequestContext{
-			Route:          rt,
-			ResponseWriter: w,
-			Request:        r,
-			Params:         vars,
-			StatusCode:     http.StatusOK,
-		}
-		global_vars := context.GetAll(nil)
-		if global_vars != nil {
-			for k, v := range global_vars {
-				req.SetState(k, v)
-			}
-		}
-
-		var last http.Handler
-
-		last = http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-			resp := rt.Fn(req)
-			if resp != nil {
-				req.Respond(resp)
-			}
-		})
-
-		mws := rt.router.middlewares
-		for i := len(mws) - 1; i >= 0; i-- {
-			last = mws[i](last)
-		}
-
-		last.ServeHTTP(w, r)
+func newRequestContext(rt *Route, w http.ResponseWriter, r *http.Request) *RequestContext {
+	vars := mux.Vars(r)
+	req := &RequestContext{
+		Route:          rt,
+		ResponseWriter: w,
+		Request:        r,
+		Params:         vars,
+		StatusCode:     http.StatusOK,
 	}
+	global_vars := context.GetAll(nil)
+	if global_vars != nil {
+		for k, v := range global_vars {
+			req.SetState(k, v)
+		}
+	}
+	return req
 }
 
 type RequestContext struct {

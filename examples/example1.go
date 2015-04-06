@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
+	. "github.com/comstud/mux_extender"
 	"log"
-	. "mux_extender"
 	"net/http"
 	"strconv"
 )
@@ -83,7 +83,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:    ":8080",
-		Handler: defaultRouter.WrapAll(authWrapper),
+		Handler: defaultRouter.AddWrappers(authWrapper),
 	}
 
 	fmt.Printf("Starting server on port 8080.\n")

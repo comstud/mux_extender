@@ -16,16 +16,31 @@ type Router struct {
 	muxRouteToRoutes map[*mux.Route]*Route
 	parentRoute      *Route // Set if we're a sub-router
 	middlewares      []func(http.Handler) http.Handler
+	wrappers         []func(RouteFn) RouteFn
+	mwHead           http.Handler
+	wrapperHead      RouteFn
+	wrapperTail      RouteFn
 }
 
-func newRouter(r *mux.Router, parent_rt *Route) *Router {
-	return &Router{
-		Router:           r,
+func newRouter(mux_r *mux.Router, parent_rt *Route) *Router {
+	wrapper := func(r *RequestContext) interface{} {
+		resp := r.Route.Fn(r)
+		if resp != nil {
+			r.Respond(resp)
+		}
+		return resp
+	}
+	r := &Router{
+		Router:           mux_r,
 		routes:           make(map[string]*Route),
 		muxRouteToRoutes: make(map[*mux.Route]*Route),
 		parentRoute:      parent_rt,
 		middlewares:      make([]func(http.Handler) http.Handler, 0),
+		wrapperTail:      wrapper,
+		wrapperHead:      wrapper,
 	}
+	r.mwHead = http.HandlerFunc(r.wrapperProcess)
+	return r
 }
 
 func NewRouter() *Router {
@@ -42,28 +57,12 @@ func (self *Router) addRoute(rt *Route) *Route {
 	return rt
 }
 
-func (self *Router) AddMiddlewares(handlers ...func(http.Handler) http.Handler) *Router {
-	self.middlewares = append(self.middlewares, handlers...)
-	return self
-}
-
 func (self *Router) RouteForMuxRoute(mux_rt *mux.Route) *Route {
 	return self.muxRouteToRoutes[mux_rt]
 }
 
 func (self *Router) RouteForRequest(r *http.Request) *Route {
 	return self.RouteForMuxRoute(mux.CurrentRoute(r))
-}
-
-func (self *Router) WrapAll(fns ...func(RouteFn) RouteFn) *Router {
-	for _, rt := range self.routes {
-		last := rt.Fn
-		for i := len(fns) - 1; i >= 0; i-- {
-			last = fns[i](last)
-		}
-		rt.Fn = last
-	}
-	return self
 }
 
 // Set some global state that will get copied to all requests
@@ -73,6 +72,37 @@ func (self *Router) SetState(key, val interface{}) {
 
 func (self *Router) GetState(key, val interface{}) interface{} {
 	return context.Get(nil, key)
+}
+
+func (self *Router) AddMiddlewares(handlers ...func(http.Handler) http.Handler) *Router {
+	self.middlewares = append(self.middlewares, handlers...)
+	var last http.Handler
+	last = http.HandlerFunc(self.wrapperProcess)
+	for i := len(self.middlewares) - 1; i >= 0; i-- {
+		last = self.middlewares[i](last)
+	}
+	self.mwHead = last
+	return self
+}
+
+func (self *Router) AddWrappers(fns ...func(RouteFn) RouteFn) *Router {
+	self.wrappers = append(self.wrappers, fns...)
+	last := self.wrapperTail
+	for i := len(self.wrappers) - 1; i >= 0; i-- {
+		last = self.wrappers[i](last)
+	}
+	self.wrapperHead = last
+	return self
+}
+
+func (self *Router) mwProcess(w http.ResponseWriter, r *http.Request) {
+	self.mwHead.ServeHTTP(w, r)
+}
+
+func (self *Router) wrapperProcess(w http.ResponseWriter, r *http.Request) {
+	rt := self.RouteForRequest(r)
+	req := newRequestContext(rt, w, r)
+	self.wrapperHead(req)
 }
 
 type Route struct {
@@ -94,8 +124,7 @@ func (self *Route) Register(r *Router) *Route {
 		self.baseRouter = r
 	}
 	self.router = r
-	handleFn := routeHandler(self)
-	self.Route = r.HandleFunc(self.Path, handleFn)
+	self.Route = r.HandleFunc(self.Path, self.baseRouter.mwProcess)
 	self.Route.Name(self.FullPath).Methods(self.Method)
 	if err := self.Route.GetError(); err != nil {
 		panic(err)
